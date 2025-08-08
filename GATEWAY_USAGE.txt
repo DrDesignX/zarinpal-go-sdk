@@ -1,0 +1,359 @@
+ZarinPal Gateway Usage Guide
+===========================
+
+This document provides comprehensive instructions for using the ZarinPal payment gateway with the Go SDK.
+
+OVERVIEW
+========
+ZarinPal is an Iranian payment gateway that allows businesses to accept online payments.
+This SDK provides easy integration with ZarinPal's REST APIs and GraphQL endpoints.
+
+QUICK SETUP
+===========
+
+1. Installation:
+   go get github.com/DrDesignX/zarinpal-go-sdk
+
+2. Import the SDK:
+   import "github.com/DrDesignX/zarinpal-go-sdk/pkg/zarinpal"
+   import "github.com/DrDesignX/zarinpal-go-sdk/pkg/zarinpal/resources"
+
+3. Configuration:
+   - Get your Merchant ID from ZarinPal dashboard
+   - Get your Access Token for GraphQL operations (optional)
+   - Choose between sandbox and production environment
+
+CONFIGURATION METHODS
+======================
+
+Method 1: Using Functional Options
+----------------------------------
+config, err := zarinpal.NewConfig(
+    zarinpal.WithMerchantID("your-merchant-id"),
+    zarinpal.WithAccessToken("your-access-token"), // Optional for GraphQL
+    zarinpal.WithSandbox(true), // Use false for production
+)
+
+Method 2: Using Environment Variables
+------------------------------------
+Set these environment variables:
+export ZARINPAL_MERCHANT_ID="your-merchant-id"
+export ZARINPAL_ACCESS_TOKEN="your-access-token"
+export ZARINPAL_SANDBOX="true"
+
+Then create config:
+config, err := zarinpal.NewConfig(zarinpal.WithEnvVars())
+
+Method 3: Manual Configuration
+-----------------------------
+config := &zarinpal.Config{
+    MerchantID:  "your-merchant-id",
+    AccessToken: "your-access-token",
+    Sandbox:     true,
+}
+
+CLIENT INITIALIZATION
+=====================
+
+// Create client with all resources
+client := zarinpal.NewClientWithResources(config)
+
+// Or create individual resource clients
+paymentsClient := zarinpal.NewPaymentsClient(config)
+verificationsClient := zarinpal.NewVerificationsClient(config)
+
+PAYMENT FLOW
+============
+
+Step 1: Create Payment Request
+------------------------------
+paymentRequest := &resources.PaymentRequest{
+    Amount:      20000,                              // Amount in Rials
+    CallbackURL: "https://yoursite.com/callback",    // Your callback URL
+    Description: "Order #1234",                      // Payment description
+    Mobile:      "09123456789",                      // Customer mobile (optional)
+    Email:       "customer@example.com",             // Customer email (optional)
+    OrderID:     "order-123",                        // Your order ID (optional)
+    Currency:    "IRR",                              // Currency (optional, defaults to IRR)
+}
+
+Step 2: Create Payment
+----------------------
+response, err := client.Payments.Create(context.Background(), paymentRequest)
+if err != nil {
+    // Handle error
+    log.Printf("Payment creation failed: %v", err)
+    return
+}
+
+// Get payment authority
+authority := response.Data.Authority
+fmt.Printf("Payment Authority: %s\n", authority)
+
+Step 3: Redirect User to Payment Gateway
+----------------------------------------
+paymentURL := client.Payments.GeneratePaymentURL(authority)
+// Redirect user to paymentURL for payment
+
+Step 4: Handle Callback and Verify Payment
+------------------------------------------
+// After user completes payment, ZarinPal redirects to your callback URL
+// with 'Authority' and 'Status' parameters
+
+verifyRequest := &resources.VerificationRequest{
+    Amount:    20000,    // Same amount as payment request
+    Authority: authority, // Authority from callback or payment creation
+}
+
+verifyResponse, err := client.Verifications.Verify(context.Background(), verifyRequest)
+if err != nil {
+    // Handle verification error
+    log.Printf("Verification failed: %v", err)
+    return
+}
+
+if verifyResponse.Data.Code == 100 {
+    // Payment successful
+    refID := verifyResponse.Data.RefID
+    fmt.Printf("Payment successful! Reference ID: %d\n", refID)
+} else {
+    // Payment failed
+    fmt.Printf("Payment failed: %s\n", verifyResponse.Data.Message)
+}
+
+ADDITIONAL OPERATIONS
+=====================
+
+1. Calculate Transaction Fee
+---------------------------
+feeRequest := &resources.FeeRequest{
+    Amount:   100000,
+    Currency: "IRR",
+}
+
+feeResponse, err := client.Fee.Calculate(context.Background(), feeRequest)
+if err != nil {
+    log.Printf("Fee calculation failed: %v", err)
+    return
+}
+
+fmt.Printf("Fee: %d\n", feeResponse.Data.Fee)
+fmt.Printf("Suggested Amount: %d\n", feeResponse.Data.SuggestedAmount)
+
+2. Query Transactions (GraphQL)
+------------------------------
+Note: Requires Access Token in configuration
+
+queryRequest := &resources.TransactionQueryRequest{
+    TerminalID: "your-terminal-id",
+    Filter: &resources.TransactionFilter{
+        RefID: refID,
+    },
+    Pagination: &resources.PaginationInput{
+        Offset: 0,
+        Count:  10,
+    },
+}
+
+transactions, err := client.Transactions.List(context.Background(), queryRequest)
+if err != nil {
+    log.Printf("Transaction query failed: %v", err)
+    return
+}
+
+3. Process Refunds
+-----------------
+refundRequest := &resources.RefundRequest{
+    Authority:   authority,
+    Amount:      10000,    // Partial or full refund amount
+    Description: "Customer requested refund",
+    Method:      resources.RefundMethodPaya, // or RefundMethodCard
+}
+
+refundResponse, err := client.Refunds.Create(context.Background(), refundRequest)
+if err != nil {
+    log.Printf("Refund failed: %v", err)
+    return
+}
+
+4. Reverse Transactions
+----------------------
+reverseRequest := &resources.ReversalRequest{
+    Authority: authority,
+}
+
+reverseResponse, err := client.Reversals.Reverse(context.Background(), reverseRequest)
+if err != nil {
+    log.Printf("Reversal failed: %v", err)
+    return
+}
+
+ERROR HANDLING
+==============
+
+The SDK provides structured error handling:
+
+if err != nil {
+    switch err := err.(type) {
+    case *zarinpal.APIError:
+        fmt.Printf("API Error: %s (Code: %d)\n", err.Message, err.Code)
+    case *zarinpal.ValidationError:
+        fmt.Printf("Validation Error: %s\n", err.Message)
+    case *zarinpal.NetworkError:
+        fmt.Printf("Network Error: %s\n", err.Message)
+    default:
+        fmt.Printf("Unknown Error: %v\n", err)
+    }
+}
+
+COMMON RESPONSE CODES
+====================
+
+Payment Creation:
+- 100: Payment request created successfully
+- -9: Invalid merchant ID
+- -10: Invalid IP or merchant not active
+- -11: Merchant not found
+- -12: Request not acceptable
+
+Payment Verification:
+- 100: Transaction verified successfully
+- 101: Transaction already verified
+- -21: No transaction found with given parameters
+- -22: Transaction failed
+- -33: Transaction amount is less than minimum allowed
+
+SANDBOX TESTING
+===============
+
+For testing, use sandbox mode:
+- Set Sandbox: true in configuration
+- Use test merchant ID provided by ZarinPal
+- Payments won't be charged to real cards
+- Use test card numbers for testing
+
+Test Card Numbers:
+- 5022291070873056 (successful payment)
+- 5022291070873064 (failed payment)
+
+PRODUCTION DEPLOYMENT
+====================
+
+Before going live:
+1. Set Sandbox: false in configuration
+2. Use your production merchant ID
+3. Ensure your callback URL is accessible from internet
+4. Test the complete payment flow
+5. Implement proper error handling and logging
+6. Set up monitoring for payment failures
+
+SECURITY CONSIDERATIONS
+======================
+
+1. Never expose your merchant ID or access token in client-side code
+2. Always verify payments server-side using the verification API
+3. Implement proper HTTPS for all communication
+4. Store sensitive data securely
+5. Log payment attempts for debugging and auditing
+6. Implement rate limiting to prevent abuse
+
+WEBHOOK INTEGRATION
+==================
+
+ZarinPal can send webhook notifications for payment status updates.
+Configure webhook URL in your ZarinPal dashboard to receive real-time
+payment notifications.
+
+SUPPORT AND RESOURCES
+=====================
+
+- ZarinPal Documentation: https://docs.zarinpal.com/
+- SDK Repository: https://github.com/DrDesignX/zarinpal-go-sdk
+- ZarinPal Dashboard: https://www.zarinpal.com/
+- Support: Contact ZarinPal support for merchant-related issues
+
+EXAMPLE COMPLETE IMPLEMENTATION
+===============================
+
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "net/http"
+
+    "github.com/DrDesignX/zarinpal-go-sdk/pkg/zarinpal"
+    "github.com/DrDesignX/zarinpal-go-sdk/pkg/zarinpal/resources"
+)
+
+func main() {
+    // Initialize SDK
+    config, err := zarinpal.NewConfig(
+        zarinpal.WithMerchantID("your-merchant-id"),
+        zarinpal.WithSandbox(true),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    client := zarinpal.NewClientWithResources(config)
+
+    // Setup HTTP handlers
+    http.HandleFunc("/pay", func(w http.ResponseWriter, r *http.Request) {
+        handlePaymentRequest(w, r, client)
+    })
+
+    http.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+        handlePaymentCallback(w, r, client)
+    })
+
+    log.Println("Server starting on :8080")
+    log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func handlePaymentRequest(w http.ResponseWriter, r *http.Request, client *zarinpal.ClientWithResources) {
+    paymentRequest := &resources.PaymentRequest{
+        Amount:      50000,
+        CallbackURL: "http://localhost:8080/callback",
+        Description: "Test Payment",
+    }
+
+    response, err := client.Payments.Create(context.Background(), paymentRequest)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    paymentURL := client.Payments.GeneratePaymentURL(response.Data.Authority)
+    http.Redirect(w, r, paymentURL, http.StatusFound)
+}
+
+func handlePaymentCallback(w http.ResponseWriter, r *http.Request, client *zarinpal.ClientWithResources) {
+    authority := r.URL.Query().Get("Authority")
+    status := r.URL.Query().Get("Status")
+
+    if status != "OK" {
+        fmt.Fprintf(w, "Payment cancelled or failed")
+        return
+    }
+
+    verifyRequest := &resources.VerificationRequest{
+        Amount:    50000,
+        Authority: authority,
+    }
+
+    response, err := client.Verifications.Verify(context.Background(), verifyRequest)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    if response.Data.Code == 100 {
+        fmt.Fprintf(w, "Payment successful! RefID: %d", response.Data.RefID)
+    } else {
+        fmt.Fprintf(w, "Payment verification failed: %s", response.Data.Message)
+    }
+}
+
+END OF DOCUMENT
